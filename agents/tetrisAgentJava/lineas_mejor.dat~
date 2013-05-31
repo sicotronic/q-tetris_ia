@@ -1,0 +1,98 @@
+Message from inside the agent: Running the Q-Learning Agent Alpha version!!!
+RL-Glue Java Agent Codec Version: 2.07 (Build:804:805M)
+	Connecting to 127.0.0.1 on port 4096...
+	Agent Codec Connected
+1 0
+2 0
+3 2
+4 4
+5 4
+6 4
+7 6
+8 6
+9 6
+10 8
+11 8
+12 8
+13 8
+14 10
+15 12
+16 14
+17 14
+18 16
+19 16
+20 16
+21 16
+22 16
+23 16
+24 16
+25 18
+26 20
+27 22
+28 22
+29 24
+30 24
+31 24
+32 24
+33 28
+34 28
+35 28
+36 28
+37 29
+38 29
+39 29
+40 30
+41 30
+Printing some stats for the Q-Learning method Alpha Version: 	 steps:176 	 reward:3,95 
+ 
+ 
+ 
+Q-Learning method Alpha Version: Completed Lines: 30 
+ 
+ 
+1 0
+2 0
+3 2
+4 4
+5 4
+6 4
+7 6
+8 6
+9 8
+10 8
+11 8
+12 8
+13 8
+14 8
+15 8
+16 10
+17 10
+18 12
+19 14
+20 14
+21 14
+22 14
+23 14
+24 14
+25 14
+26 15
+27 19
+28 19
+29 21
+30 21
+31 21
+32 24
+33 24
+34 24
+35 24
+36 26
+37 28
+Printing some stats for the Q-Learning method Alpha Version: 	 steps:325 	 reward:6,30 
+ 
+ 
+ 
+Q-Learning method Alpha Version: Completed Lines: 28 
+ 
+ 
+1 0
+2 0

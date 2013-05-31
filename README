@@ -1,0 +1,12 @@
+
+This is a java IA agent that is meant to select actions for the Tetris domain in order to obtain the best score posible. 
+This agent learn with the implementation of the Q-Learning algorithm.
+
+All the files are the ones provided by the 2009 rl-competition except for the code that I wrote, which is in the file: 
+agents/tetrisAgentJava/src/QTetrisAgent.java
+this program also created the file: 
+agents/tetrisAgentJava/Qvalues.dat  
+where I saved the values of the Q-Matrix obtained during the training.
+
+
+

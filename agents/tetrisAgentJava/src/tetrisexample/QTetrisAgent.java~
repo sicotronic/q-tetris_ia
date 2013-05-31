@@ -1,0 +1,1163 @@
+/* A Q-Learning Reinforcement Tetris Agent 
+* Copyright (C) 2011, Juan Ignacio Navarro Horniacek
+* 
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License
+* as published by the Free Software Foundation; either version 2
+* of the License, or (at your option) any later version.
+* 
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+* 
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA. 
+*/
+
+package tetrisexample;
+
+import java.io.*;
+import java.util.Arrays;
+import java.util.Random;
+
+import org.rlcommunity.rlglue.codec.types.Action;
+import org.rlcommunity.rlglue.codec.types.Observation;
+import org.rlcommunity.rlglue.codec.AgentInterface;
+import org.rlcommunity.rlglue.codec.taskspec.TaskSpec;
+import org.rlcommunity.rlglue.codec.util.AgentLoader;
+
+
+/* Quick reference: 
+ * action:
+ * 0 - left
+ * 1 - right
+ * 2 - rotate left (counterclockwise)
+ * 3 - rotate right (clockwise)
+ * 4 - do nothing
+ * 5 - put down
+ * 
+ *  pieces:
+ * 0 - I
+ * 1 - O
+ * 2 - T
+ * 3 - S
+ * 4 - Z
+ * 5 - L
+ * 6 - J
+ */
+
+class Qsheet implements Serializable{
+	int possible_states = 667;   		// 666 es el maximo estado, 16(4pos*4rot)*7(fichas) = 112
+	int possible_actions = 112;
+	public double values[][] = new double[possible_states][possible_actions];
+}
+
+public class QTetrisAgent implements AgentInterface{
+
+	private Action action;
+	private int numInts =1;
+	private int numDoubles =0;
+
+	boolean firstActionOfEpisode;
+	int totalSteps;
+	int Steps;		
+	int TrainingAgentWidth = 4;		// El ancho del tablero en el tetris simplificado con 175 estados
+	double totalRew;
+	int CompletedLines;
+
+	//parametros y valores para el algoritmo de Qlearning
+	double alpha = 0.8;  // para que el aprendizaje se realice rapidamente
+	double gamma = 0.1;  // tomado del tutorial del CliffWorld
+	int current_state;
+	int action_taken;
+	//int next_state;
+	int possible_states = 667;   		// 666 es el maximo estado, 16(4pos*4rot)*7(fichas) = 112
+	int possible_actions = 112;
+	Qsheet Qvalues = new Qsheet();
+      
+	TaskSpec TSO = null;
+	
+	public static final int  MAXWIDTH = 20;
+	public static final int  MAXHEIGHT = 40;
+	public static final int PADDING = 3;
+	public static final int T_WALL = 8;
+	public static final int T_EMPTY = 0;
+	int bestrot, bestpos;
+	int width, height, piece;
+	int[][][][] tiles = new int[7][4][4][4];    // [piece][rotation][rows][columns]
+	int[][][] tilebottoms = new int[7][4][4];
+	// heights of columns
+	int[] skyline;
+
+	// en este tablero guardo el estado del juego para no depender del entorno grafico
+	int[][] gameboard;
+
+	static final double MIN_VALUE = -1e10;
+
+//	private void writeObject (ObjectOutputStream s) throws IOException{
+//	s.defaultWriteObject();
+
+	//...código para escribir datos
+//	}
+
+
+	public QTetrisAgent(){
+	}
+
+	/**
+	* Called just before unloading the current MDP.
+	*/
+	public void agent_cleanup() {
+	}
+
+	/**
+	* Called at the end of an episode (that is, when the board is filled up)
+	* @param lastrew  the reward received for the last step
+	*/
+	public void agent_end(double lastrew) {
+		totalRew += lastrew;
+
+		try{
+			// pon tu codigo donde se puede generar una excepcion
+			FileOutputStream fos = new  FileOutputStream("Qvalues.dat");
+			ObjectOutputStream oos = new ObjectOutputStream(fos);
+			oos.writeObject(Qvalues);
+			oos.close();
+			System.out.printf("Acabo de guardar los datos en el archivo Qvalues.dat\n");
+		}
+		catch (IOException e) {
+			// hacer algo si hubo una excepcion
+			System.out.printf("Tuve un problema al escribir el archivo\n");
+		}
+
+
+		System.out.printf("Printing some stats for the Q-Learning method Alpha Version: \t steps:%d \t reward:%.2f \n", totalSteps, totalRew );
+		System.out.printf(" \n \n \nQ-Learning method Alpha Version: Completed Lines: %d \n \n \n", CompletedLines);
+	}
+
+	/**
+	* Is never called.
+	*/
+	public void agent_freeze() {
+	}
+
+	/**
+	* Called when starting a new MDP.
+	* 
+	* @param taskSpec  the Task Specification Object of the current MDP.
+	*/
+
+//	int first_time = 0;
+
+	public void agent_init(String taskSpec) {
+		TSO = new TaskSpec(taskSpec);
+		firstActionOfEpisode = true;
+
+		action = new Action(TSO.getNumDiscreteActionDims(),TSO.getNumDiscreteActionDims());	
+		totalRew = 0;
+		totalSteps = 0;
+		
+		// ya no necesito inicializar la matriz
+
+//		if(first_time == 0) {
+//			for(int i = 0; i < possible_states; i++){			//inicializo la matriz de Q-valores
+//				for(int j = 0; j < possible_actions; j++){
+//					Qvalues.values[i][j] = MIN_VALUE;
+//				}
+//			}
+//			first_time = 1;
+//		}
+//		else {
+			try{
+
+				FileInputStream fis = new FileInputStream("Qvalues.dat");
+				ObjectInputStream ois = new ObjectInputStream(fis);
+				try{
+					Qvalues = (Qsheet) ois.readObject();
+				}
+				catch (ClassNotFoundException e){
+					System.out.printf("problemas con la clase qsheet\n");
+				}
+				ois.close();
+				System.out.printf("Acabo de leer los datos en el archivo Qvalues.dat\n");
+			}
+			catch (IOException e) {
+				System.out.printf("Tuve un problema al leer el archivo\n");
+			}
+//		}
+	}
+
+
+	public String agent_message(String arg0) {
+		return null;
+	}
+        
+	/**
+	* Called when a new episode starts. 
+	* We perform some initialization: find out the board width&height,
+	* set up an empty board and the arrays that contain rotated versions 
+	* of the 7 tetrominoes.
+	* After initialization, we call agent_step() to generate a suitable action
+	* 
+	* @param o the first obrervation of the episode
+	* @return  the first action of the episode
+	*/
+	public Action agent_start(Observation o){
+		CompletedLines = 0;
+		Steps = 0;
+		int len = o.intArray.length;
+		height = o.intArray[len-2];		
+		width  = o.intArray[len-1];  //TrainingAgentWidth;  // ***** Aca deberia colocarlo en 4 para que el agente aprenda sobre ese tablero *****
+		  // antees tenia width = o.intArray[len-1];	
+		// 2*PADDING es porque tengo que colocar el relleno izquierdo, y derecho, o el de arriba y de abajo
+		board = new int[width + 2*PADDING][height + 2*PADDING];	
+		workboard = new int[width + 2*PADDING][height + 2*PADDING];
+		skyline = new int[width + 2*PADDING];
+
+		// en este tablero guardo el estado del juego.
+		gameboard = new int[width + 2*PADDING][height + 2*PADDING];
+
+		bestrot = 0;
+		bestpos = 0;
+
+		for(int i = 0; i < 7; i++){		// genero todas las piezas y sus rotaciones
+			for(int j = 0; j < 4; j++){
+				int tile[][] = generateTile(i, j);
+				for(int x = 0; x < 4; x++){
+					int last = -100;		// sirve para los tilebottoms
+					for(int y = 0; y < 4; y++){
+						tiles[i][j][x][y] = tile[x][y];
+						if(tile[x][y] != 0)
+							last = y;
+					}
+					tilebottoms[i][j][x] = last;		
+				}
+			}
+		}
+
+		// limpio el tablero donde voy a llevar el estado del juego.
+		for(int i = 0; i < gameboard.length; i++){
+			for(int j = 0; j < gameboard[i].length; j++)
+				gameboard[i][j] = T_WALL;
+        	}
+		for(int i = 0; i < width; i++){
+			for(int j = 0; j < height + PADDING; j++)
+				gameboard[i + PADDING][j] = T_EMPTY;
+		}
+
+		action.intArray[0] = 4;			// 4-Do Nothing
+		return agent_step(0, o);
+	}
+
+
+	/**
+	* auxiliary array. When a new tetromino arrives at the board, we detect 
+	* its type and the position of its upper-left corner. The positions of 
+	* the four "minoes" are stored in this array.
+	*/
+	int[][][] dpos = {{{0,0},{1,0},{2,0},{3,0}},
+				{{0,0},{1,0},{0,1},{1,1}},
+				{{0,0},{-1,1},{0,1},{0,2}},
+				{{0,0},{1,0},{1,1},{2,1}},
+				{{0,0},{1,0},{-1,1},{0,1}},
+				{{0,0},{1,0},{2,0},{2,1}},
+				{{0,0},{0,1},{-1,1},{-2,1}}
+	}; 			// no me es claro todavia para que se utiliza este arreglo! :S
+        
+                
+	/**
+	* auxiliary array. When a new tetromio arrives, we detect its x position 
+	* as its upper-left corner. To get the "true position", we have to modify it.
+	* PosShift[rot][piece] is the shift required for "piece" in rotation "rot".
+	*/
+	public static final int[][] PosShift = {
+		{0, 0,-1, 0,-1, 0,-2},
+		{2, 0,-1, 0,-1, 0,-1},
+		{0, 0, 0, 0,-1, 0,-2},
+		{0, 0,-1, 0,-1, 1,-2}
+	}; 
+
+	// number of different rotations for the tetrominoes.
+	public static final int[] nrots = {2,1,4,2,2,4,4}; 
+    
+	// rawboard contains the currently falling piece
+	int[][] rawboard = new int[MAXWIDTH][MAXHEIGHT];
+
+	// board does not contain the currently falling piece, and is padded with zeroes all around
+	int[][] board;
+
+	// a work copy of board[][], we try out new placements of tetrominoes here 
+	int[][] workboard;
+
+	int pos = 0, rot = 0;
+	int pos0 = -1;
+        
+	/**
+	* It selects a primitive action depending on the current game state.
+	* Note: the selection logic is in putTileGreedy()
+	* 
+	* @param lastrew  the last reward
+	* @param o     the current game state
+	* @return      the action taken by the agent
+	*/
+	public Action agent_step(double lastrew, Observation o){
+		int len = o.intArray.length;
+		int i, j, k, a;
+		int arrayWidth = o.intArray[len-1];
+		boolean isnewpiece;
+		action.intArray[0] = 0;
+		totalSteps++;
+		totalRew += lastrew;
+		piece = -1;
+
+		for (i = 0; i < 7; i++){
+			if (o.intArray[len-9+i]==1)
+				piece = i;
+		}
+		for (i = 0; i < arrayWidth; i++){	// hago una copia del tablero para mi representacion
+			for (j = 0; j < height; j++){
+				rawboard[i][j] = o.intArray[j*arrayWidth+i];
+			}
+		}
+		isnewpiece = false;
+		for (i = 0; i < arrayWidth; i++){
+			// if there is something in the first line, then we have a new tetromino
+			if (rawboard[i][0]!= 0){
+				isnewpiece = true;
+				break;
+			}
+		}
+		if (isnewpiece){
+			// we overwrite the new piece with a different "color" (2 instead of 1)
+			// so that we can separate it from the rest of the board
+			// we could also erase it...
+			pos0 = i;
+			for (k=0; k<4; k++){
+				rawboard[pos0+dpos[piece][k][0]][dpos[piece][k][1]] = 2;
+			}
+		}
+		if (firstActionOfEpisode){
+			// si era la primera accion del episodio, al terminar esto ya no lo es mas
+			firstActionOfEpisode = false;
+		}
+
+		if (isnewpiece){
+			rot = 0;
+			pos   = pos0 + PosShift[rot][piece];
+			clearBoard();
+			for (i=0; i<width; i++){
+				for (j=0; j<height; j++){
+					// note: the new piece is not copied to board!
+					board[i+PADDING][j+PADDING] = (gameboard[i+PADDING][j+PADDING]!=0) ? 1:0;
+				}
+			}
+			//debugdrawBoard(board);
+		// *** Entrenamiento? o Explotacion?
+			//current_state = getState(board);
+			//System.out.printf("El estado actual es: %d\n", current_state);
+			// an up-to-date skyline is required for the analysis of the board.
+			updateSkyline();
+			// putTileGreedy() analyzes the board and sets bestrot and bestpos
+			putTileGreedy(piece);
+			//int next_state = getState(board);
+			//double reward = getValue(board);
+			//double thisQ = Qvalues.values[current_state][action_taken];
+			//double maxQ = getMaxRewardState(next_state);
+			//Qvalues.values[current_state][action_taken] = thisQ + alpha*(reward + gamma*maxQ - thisQ);  // preguntar si no convenia 0
+
+			// muestro la matriz de valores
+			//ShowQvalues();
+			Steps++;  // significa que me llego una ficha nueva
+			//Imprimo los valores de la altura maxima para tomar como metrica:
+			//int characteristics[] = getCharacteristics(board);
+			//System.out.printf("%d %d\n", Steps, characteristics[2]); // cantidad de huecos
+		}
+		pos = pos0 + PosShift[rot][piece];
+
+		// bestrot and bestpos is set by putTileGreedy, when a new piece arrives.
+		// after that, we try to achieve them step-by-step with elementary moves
+		// bestrot is a number between 0 and 3, but it may be larger than the 
+		// number of _different_ rotations for a given tetromino. 
+		// For example, a Z piece can have bestrot=+3, which we modify to +1.
+		int nrots = 4;
+		if ((piece == 0) || (piece==3) || (piece==4)) nrots = 2; //I, S, Z piece
+		if (((piece==0) || (piece==3) || (piece==4)) && (bestrot>=2))
+			bestrot-=2;
+		if (piece ==1) //O piece
+			bestrot = 0;
+
+		// now we have bestpos and bestrot. this is translated to 
+		// a sequence of primitive moves as follows:
+		// 1. when the piece is in the first line, we make only right/left moves
+		// 2. we rotate the piece to its final position
+		// 3. we move the piece to its final position
+		// 4. we drop it.
+
+		if ((isnewpiece) && (pos > bestpos))
+			a = 0; //left
+		else if ((isnewpiece) && (pos < bestpos))
+			a = 1; //right
+		else if ((isnewpiece) && (pos == bestpos))
+			a = 4; //do nothing
+			// maybe we need to rotate later, but rotation is not always allowed in the first line.
+		else if ((rot != bestrot) && ((rot == bestrot+1) || (rot+nrots == bestrot+1)))
+			a = 2; //rotate left
+		else if ((rot != bestrot) && ((rot == bestrot-1) || (rot-nrots == bestrot-1)))
+			a = 3; //rotate right
+		else if ((rot != bestrot) && ((rot == bestrot+2) || (rot+nrots == bestrot+2)))
+			a = 2; //need to rotate twice, we start by one rotate left
+		else if ((rot == bestrot) && (pos > bestpos))
+			a = 0; //left
+		else if ((rot == bestrot) && (pos < bestpos))
+			a = 1; //right
+		else if ((rot == bestrot) && (pos == bestpos))
+			a = 5; //drop
+		else{
+			// there is some kind of problem. There should not be any.
+			//System.out.printf("%d: (%d,%d) vs (%d,%d) \n", piece, pos,rot,bestpos,bestrot);
+			a = 4; 
+		}
+		action.intArray[0] = a;
+
+		// print debug info
+		//System.out.println(debug2DArrayToString(tiles[piece][rot])+piece);
+		//System.out.printf("rot:%d, offset:%d\n\n", rot, PosShift[rot][piece]);
+
+		// depending on the action taken, we modify our model of the game state
+		//         * 0 - left
+		//         * 1 - right
+		//         * 2 - rotate left (counterclockwise)
+		//         * 3 - rotate right (clockwise)
+		//         * 4 - do nothing
+		//         * 5 - put down
+
+		switch (action.intArray[0]){
+			case 0:
+				pos0--;
+				break;
+			case 1:
+				pos0++;
+				break;
+			case 2:
+				rot--;
+				if (rot<0)
+					rot = 3;
+				break;
+			case 3:
+				rot++;
+				if (rot>=4) 
+					rot = 0;
+				break;
+		}
+		if (((piece == 0) || (piece==3) || (piece==4)) && (rot>=2))
+			rot-=2;
+		if (piece==1)
+			rot=0;
+
+            return action;
+	}
+	
+	public void clearBoard(){
+		for(int i = 0; i < board.length; i++){
+			for(int j = 0; j < board[i].length; j++)
+				board[i][j] = T_WALL;
+        	}
+		for(int i = 0; i < width; i++){
+			for(int j = 0; j < height + PADDING; j++)
+				board[i + PADDING][j] = T_EMPTY;
+		}
+		updateSkyline();
+	}
+    
+	public void updateSkyline(){
+		int i, j;
+		for(i=0; i<skyline.length; i++){
+			for(j=0; j<board[i].length; j++){
+				if (board[i][j] != 0)
+				break;
+			}
+			skyline[i] = j;
+		}
+	}
+
+	/**
+	* Copies board to workboard
+	*/
+	public void copyWorkBoard(){
+		for(int i = PADDING; i < width + PADDING; i++)
+			System.arraycopy(board[i], 0, workboard[i], 0, height + 2*PADDING);
+	}
+
+	public String debug2DArrayToString(int[][] a){
+		int i,j;
+		int h = a.length; 
+		int w = a[0].length;
+		String s = "";
+		for (j=0; j<h; j++){
+			for (i=0; i<w; i++)
+				s = s+a[i][j];
+			s = s+"\n";
+		}       
+		return s;
+	}
+    
+	/**
+	* Prints an ASCII representation of the board.
+	* useful for debugging.
+	*/
+	public void debugdrawBoard(int board[][]){
+		for(int j = 0; j < height; j++){
+			for(int i = 0; i < width; i++)
+				System.out.printf("%d", new Object[] {Integer.valueOf(board[i + PADDING][j + PADDING])});
+			System.out.println();
+		}
+		System.out.println("  ");
+	}
+
+	public void ShowQvalues(){
+		System.out.printf("La matriz de Qvalores\n\n");
+		for(int i = 0; i < possible_states; i++){
+			for(int j = 0; j < possible_actions; j++){
+				System.out.print(Qvalues.values[i][j]);
+				System.out.printf(" ");
+			}
+			System.out.println();
+		}
+	}
+
+	/**
+	* Tries to find a good placement for a tetromino of type "type".
+	* assigns values to "bestrot" and "bestpos"
+	*  
+	* @param type  the type of the tetromino to place. an integer from 0 to 6.
+	* @return      the number of lines erased by the proposed placement,
+	*              or -1 if the tile cannot be placed.
+	*/
+
+	int mistakes;  // cantidad de veces que la ficha se intenta poner invalidamente
+
+	public int putTileGreedyTraining(int type){
+		double bestvalue = MIN_VALUE;
+		double probability = 0;
+		Random random = new Random();
+		int result = -1;
+		int res;
+
+		probability = random.nextDouble();
+
+		if(mistakes == 12){		// si ya intente 12 veces colocar una ficha, dejo de intentarlo
+			mistakes = 0;		// reinicio la cantidad de intentos y salgo
+			return -1;
+		}
+		if(probability < 0.6 && mistakes < 10){		// Coloco la pieza de manera random, si lo intente menos de 10 veces
+			//System.out.printf("Estoy colocando la ficha de manera aleatoria!!!\n");
+			
+			bestrot = (int) (random.nextDouble()*(double)(nrots[type]));
+			bestpos = (int) (random.nextDouble()*(double)(width));
+
+			copyWorkBoard();
+			res = putTile(workboard, type, bestrot, bestpos);
+			if(res >= 0){
+				bestvalue = getValue(workboard);
+			} 
+			else{
+				bestvalue = MIN_VALUE;
+			}
+		}
+		else{		// Coloco la pieza de manera greedy
+			for(int rot = 0; rot < nrots[type]; rot++){  		// para cada rotacion
+				for(int pos = 0; pos < width; pos++){		// para cada posicion (esto deberia ser 4)
+					copyWorkBoard();
+					res = putTile(workboard, type, rot, pos);
+					double value;
+					if(res >= 0){
+						value = getValue(workboard);
+					} 
+					else{
+						value = MIN_VALUE;
+					}
+					if(value > bestvalue){
+						bestvalue = value;
+						bestrot = rot;
+						bestpos = pos;
+					}
+				}
+			}
+		}
+		// if the best placement is legal, then we do it on the real board, too.
+		if(bestvalue > MIN_VALUE){
+			result = putTile(board, type, bestrot, bestpos);
+			int resaux = putTile(gameboard, type, bestrot, bestpos);  // coloco la ficha en mi tablero de representacion del juego
+			int countIt = -1;  // determina si cuenta las lineas borradas o no
+			eraseLines(gameboard, countIt); // borro las lineas completadas en mi representacion del juego
+			updateSkyline();
+			mistakes = 0;
+			// indico que accion estoy realizando
+			action_taken = 	getActionNumber(type, bestrot, bestpos);
+		}
+		else{		// si no es una accion valida, vuelvo a intentarlo
+			mistakes++;
+			//System.out.printf("Accion no valida, es mi intento numero: %d\n", mistakes);
+			putTileGreedy(type);
+		}
+
+		return result;
+	}
+
+
+	// ** ACA DEBO IMPLEMENTAR LA FUNCION PARA COLOCAR LA FICHA UTILIZANDO EXPLORACION *** //
+	//    primero tomo el tablero, 
+	//		bestvale = MIN_VALUE
+	//    		itero para cada subtablero de ancho 4: (necesito una funcion que me de un estado para el subtablero segun un offset)
+	// 			state = obtengo el estado del subtablero actual
+	//			busco el i del maximo valor en Qvalues.values[state][i]
+	//			action = calculo la accion
+	//			hago una copia del tablero mayor
+	//			prueba realizar esa accion en el tablero mayor
+	//			value = valor del tablero despues de hacer esa accion
+	//			if (value > best_value)
+	//				best_action = action
+	//	Salido del ciclo, realizo esa accion en el tablero.
+
+	public int putTileGreedy(int type){
+		double bestvalue = MIN_VALUE;
+		int result = -1;
+		int res;
+		int action_array[] = new int[3];
+
+		for(int i = 0; i < width - TrainingAgentWidth; i++){  // itero entre todos los subtableros posibles
+			int state = getState(gameboard, i);
+			int action_number = getMaxActionState(state);
+			action_array = getActionFromNumber(action_number);
+			copyWorkBoard();
+			res = putTile(workboard, type, action_array[1], (i+action_array[2]));
+			double value;
+			if(res >= 0){
+				value = getValue(workboard);
+			} 
+			else{
+				value = MIN_VALUE;
+			}
+			if(value > bestvalue){
+				bestvalue = value;
+				bestrot = action_array[1];
+				bestpos = i+action_array[2];
+			}
+		}
+
+		// if the best placement is legal, then we do it on the real board, too.
+		if(bestvalue > MIN_VALUE){
+			result = putTile(board, type, bestrot, bestpos);
+			int resaux = putTile(gameboard, type, bestrot, bestpos);  // coloco la ficha en mi tablero de representacion del juego
+			int countIt = -1;  // determina si cuenta las lineas borradas o no
+			eraseLines(gameboard, countIt); // borro las lineas completadas en mi representacion del juego
+			updateSkyline();
+		}
+		else{		// si no es una accion valida, vuelvo a intentarlo
+			result = -1;
+		}
+
+		return result;
+	}
+
+
+	/**
+	* Puts a tetromino of type "type" on the board "b", wit rotation "rot" and position "pos".
+	* @param b     the board to play on. Can be either "board" or "workboard"
+	* @param type  type of tetromino to place
+	* @param rot   rotation of tetromino
+	* @param pos   position of tetromino
+	* @return
+	*/
+	public int putTile(int board[][], int type, int rot, int pos){
+		int tile[][] = tiles[type][rot];
+		int ofs = 10000;
+		int countIt = 1;
+		for(int x = 0; x < 4; x++)
+			ofs = Math.min(ofs, skyline[x + pos + PADDING] - tilebottoms[type][rot][x] - 1);
+		if(ofs < PADDING)
+			return -1;
+		//System.out.println(debug2DArrayToString(tile)+type+"\n\n");
+		for(int x = 0; x < 4; x++){
+			for(int y = 0; y < 4; y++)
+				if(tile[x][y] != 0)
+					board[x+pos+PADDING][y+ofs] = type + 1;
+		}
+		//System.out.println(debug2DArrayToString(board)+"\n\n");
+
+		int lastLandingHeight = ofs;
+		//System.out.println("Voy a borrar las lineas completadas!\n\n");
+		int result = eraseLines(board, countIt);
+		int nholes = 0;
+		boolean started = false;
+		for(int y = 0; y < height; y++){
+			if(board[PADDING][y + PADDING] != 0)
+				started = true;
+			if(started && board[PADDING][y + PADDING] == 0) 
+				nholes++;				
+		}
+
+		int startrot = 0;
+		int startpos = (width - 1) / 2;
+		if(type == 0)
+			startpos--;
+
+		int nm = 1 + Math.abs(startpos - pos);
+		if(type >= 3 && Math.abs(startrot - rot) == 2)
+			nm += 2;
+		if(startrot != rot)
+			nm++;
+		if(lastLandingHeight < nm + 1)
+			result = -1;
+
+		return result;
+	}
+
+	/**
+	* Returns an array containing a tetromino of the required type and rotation.
+	* 
+	* @param type  Type of tetromino
+	* @param rot   Rotation of tetromino
+	* @return      array containing the tetromino
+	*/
+	int [][] generateTile(int type, int rot){
+		int [][] t;
+		// we copy the basic shape into t
+		switch (type){
+			case 0: // I
+				t = new int[][]{{1, 0, 0, 0}, {1, 0, 0, 0}, {1, 0, 0, 0}, {1, 0, 0, 0}}; 
+				break;
+			case 1: // O
+				t = new int[][]{{1, 1, 0, 0}, {1, 1, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}; 
+				break; 
+			case 2: // T
+				t = new int[][]{{0, 1, 0, 0}, {1, 1, 1, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}; 
+				break;                
+			case 3: // Z
+				t = new int[][]{{1, 0, 0, 0}, {1, 1, 0, 0}, {0, 1, 0, 0}, {0, 0, 0, 0}}; 
+				break;                
+			case 4: // S
+				t = new int[][]{{0, 1, 0, 0}, {1, 1, 0, 0}, {1, 0, 0, 0}, {0, 0, 0, 0}}; 
+				break;                
+			case 5: // J
+				t = new int[][]{{1, 0, 0, 0}, {1, 0, 0, 0}, {1, 1, 0, 0}, {0, 0, 0, 0}}; 
+				break;                
+			case 6: // L
+				t = new int[][]{{0, 1, 0, 0}, {0, 1, 0, 0}, {1, 1, 0, 0}, {0, 0, 0, 0}}; 
+				break;                
+			default: // non-existent piece
+				t = new int[][]{{1, 1, 1, 1}, {1, 1, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}; 
+				break; 
+		}
+		int[][] t2 = new int[4][4];
+		// we rotate t to the required position and put it to t2
+		int x, y;
+		switch (rot){
+			case 0:
+				for (x=0; x<4; x++)
+					for (y=0; y<4; y++)
+						t2[x][y] = t[x][y];
+						break;
+			case 1:
+				// 1110      0000     
+				// 0100      1000       
+				// 0000  ->  1100          
+				// 0000      1000          
+				for (x=0; x<4; x++)
+					for (y=0; y<4; y++)
+						t2[x][y] = t[y][3-x];
+						break;
+			case 2:
+				for (x=0; x<4; x++)
+					for (y=0; y<4; y++)
+						t2[x][y] = t[3-x][3-y];
+						break;
+			case 3:
+				for (x=0; x<4; x++)
+					for (y=0; y<4; y++)
+						t2[x][y] = t[3-y][x];
+						break;                
+		}
+		int emptyrow = 0;
+		int emptycol = 0;
+
+		// determine number of empty columns
+		outerloop1:
+		for (x=0; x<4; x++){
+			for (y=0; y<4; y++){
+				if (t2[x][y] != 0)
+				break outerloop1;
+			}
+			emptycol++;
+		}
+        
+		// determine number of empty columns
+		outerloop2:
+		for (y=0; y<4; y++){
+			for (x=0; x<4; x++){
+				if (t2[x][y] != 0)
+					break outerloop2;
+			}
+			emptyrow++;
+		}
+
+		//we shift t2 so that the array does not begin with an empty row or column
+		int[][] t3 = new int[4][4];
+        
+		for (x=emptycol; x<4; x++){
+			for (y=emptyrow; y<4; y++)
+				t3[x-emptycol][y-emptyrow] = t2[x][y];
+		}
+		
+		return t3;
+	}
+
+
+	/**
+	* Erase complete lines from the board, if there are any
+	* @param board the board
+	* @return  the number of lines erased
+	*/
+	int eraseLines(int board[][], int countIt){
+		int nErased = 0;
+		int y = 0;
+		int x = 0;
+		boolean isfull = true;
+
+		//debugdrawBoard();
+		//System.out.printf("Voy a detectar si hay lineas completadas\n");
+		for(y = height-1; y >= 0; y--){
+			isfull = true;			// asumo que la linea esta completa
+			for(x = 0; x < width; x++){	// recorro la linea a lo ancho
+				if(board[x+PADDING][y+PADDING]==0){
+				// si encuentro que hay un hueco, digo q no esta completa y corto
+					isfull = false;
+					break;	
+				}
+			}
+			if(isfull){
+				// si la linea esta completa la borro moviendo todas las superiores hacia abajo un nivel
+				for(int z = y; z >= 0; z--){
+					for(x = 0; x < width; x++){
+						board[x+PADDING][z+PADDING] = board[x+PADDING][(z-1)+PADDING];
+					}
+				}
+				nErased++;		// sumo uno mas a la cantidad de lineas borradas
+				if(countIt == 1){
+					CompletedLines++;
+					//System.out.printf("Se borro otra linea, ya van : %d\n", CompletedLines);
+				}
+				//y++;			// situo el indice donde estaba (porque antes habia una linea mas)
+
+			}
+		}
+
+		return nErased;
+	}
+
+	// HAY QUE CHEQUEAR QUE EL OFFSET SEA MENOR QUE EL ANCHO DEL TABLERO - TRAININGAGENTWIDTH
+	int getState(int board[][], int offset){
+		int i, j;
+		int stwidth = TrainingAgentWidth;
+		int heights[] = new int[stwidth];
+		int fixedheights[] = new int[stwidth];
+		int differences[] = new int[stwidth-1];
+		int result = 0;
+		// aca debo tomar el contorno de las alturas, reducir las distancias entre ellas a un maximo de 3 de distancia y
+		// calcular las diferencias entre las alturas de las primeras 4 columnas consecutivas	/**		// la idea es que mas adelante le pase un subtablero y que calcule el estado.
+		// obtengo las alturas:
+
+		//System.out.printf("Estoy en el subtablero que comienza en %d\n", offset);
+
+		for(i = offset; i < (offset + stwidth); i++){
+			for(j=0; j<height; j++){
+				if (board[i+PADDING][j+PADDING]!= 0) 
+				// empiezo de arriba a abajo si encuentro un casillero lleno, es porq ahi esta la altura
+				// para calcularla utilizo height - j (que son los casilleros vacios por arriba)
+				break;
+			}
+			heights[i - offset] = height-j;
+		}
+
+		//System.out.printf("Las alturas del contorno son las siguientes: ");
+		//for (i = 0; i < stwidth; i++){
+		//	System.out.printf("%d ", heights[i]);
+		//}
+		//System.out.printf("\n");
+
+		// ahora tengo que nivelar la diferencia entre las alturas.
+		fixedheights[0] = heights[0];
+		for(i = 0; i < stwidth-1; i++){
+			if(heights[i] - heights[i+1] >= 4) {
+				if(fixedheights[i] >= 3) 
+					fixedheights[i+1] = fixedheights[i]-3;
+				else
+					fixedheights[i+1] = 0;
+			}
+			else if (heights[i] - heights[i+1] <= -4)
+				fixedheights[i+1] = fixedheights[i]+3;
+			else
+				fixedheights[i+1] = fixedheights[i]-(heights[i]-heights[i+1]);
+		}
+
+		//System.out.printf("Las alturas niveladas son las siguientes: ");
+		//for (i = 0; i < stwidth; i++){
+		//	System.out.printf("%d ", fixedheights[i]);
+		//}
+		//System.out.printf("\n");
+
+		// ahora tengo que calcular las diferencias de alturas
+		for(i = 0; i < stwidth-1; i++){
+			if(fixedheights[i] - fixedheights[i+1] == 0)
+				differences[i] = 0;
+			else if (fixedheights[i] - fixedheights[i+1] == -1) // la siguiente columna esta uno mas arriba
+				differences[i] = 1;
+			else if (fixedheights[i] - fixedheights[i+1] == -2) // la siguiente columna esta dos mas arriba
+				differences[i] = 2;
+			else if (fixedheights[i] - fixedheights[i+1] == -3) // la siguiente columna esta tres mas arriba
+				differences[i] = 3;
+			else if (fixedheights[i] - fixedheights[i+1] == 1) // la siguiente columna esta uno mas abajo
+				differences[i] = 4;
+			else if (fixedheights[i] - fixedheights[i+1] == 2) // la siguiente columna esta dos mas abajo
+				differences[i] = 5;
+			else if (fixedheights[i] - fixedheights[i+1] == 3) // la siguiente columna esta tres mas abajo
+				differences[i] = 6;
+		}
+
+		//System.out.printf("Las diferencias de alturas son las siguientes: ");
+		//for (i = 0; i < stwidth-1; i++){
+		//	System.out.printf("%d ", differences[i]);
+		//}
+		//System.out.printf("\n");
+
+		// ahora coloco cada diferencia como digito del estado
+		int lastdif = stwidth-1;
+		for (i = 0; i < lastdif; i++){
+			result = result + powerTen(i)*differences[lastdif-1-i]; //comienzo desde el ultimo
+		}
+
+		// el resultado queda como un numero entre 000 y 636
+		return result;
+	}
+
+	int powerTen(int exponent){
+		int power = 1;
+		for(int i = 0; i < exponent; i++){
+			power = power*10;
+		}
+		return power;
+	}
+
+	int getActionNumber(int type, int rot, int pos) {		// devuelvo el numero de accion realizada.
+		int indice = 0;
+		int accionesPorTipo = 16;
+		int result = 0;
+
+		// para la rotacion 0
+		if(rot == 0 && pos == 0)
+			indice = 0;
+		if(rot == 0 && pos == 1)
+			indice = 1;
+		if(rot == 0 && pos == 2)
+			indice = 2;
+		if(rot == 0 && pos == 3)
+			indice = 3;
+		// para la rotacion 1
+		if(rot == 1 && pos == 0)
+			indice = 4;
+		if(rot == 1 && pos == 1)
+			indice = 5;
+		if(rot == 1 && pos == 2)
+			indice = 6;
+		if(rot == 1 && pos == 3)
+			indice = 7;
+		// para la rotacion 2
+		if(rot == 2 && pos == 0)
+			indice = 8;
+		if(rot == 2 && pos == 1)
+			indice = 9;
+		if(rot == 2 && pos == 2)
+			indice = 10;
+		if(rot == 2 && pos == 3)
+			indice = 11;
+		// para la rotacion 3
+		if(rot == 3 && pos == 0)
+			indice = 12;
+		if(rot == 3 && pos == 1)
+			indice = 13;
+		if(rot == 3 && pos == 2)
+			indice = 14;
+		if(rot == 3 && pos == 3)
+			indice = 15;
+
+		result = type*accionesPorTipo + indice;
+		
+		return result;
+	}
+
+	int[] getActionFromNumber(int number) {		// devuelvo el numero de accion realizada.
+		int type = 0;
+		int rot = 0;
+		int pos = 0;
+		int indice = 0;
+		int accionesPorTipo = 16;
+		int result[] = new int[3]; // tres resultados, tipo, rotacion, posicion.
+
+		indice = number % 16; // el resto de dividir el numero por 16 es el indice.
+		type = indice / 16;   // la division entera por 16 da como resultado el tipo de ficha
+
+		// para la rotacion 0
+		if(indice == 0){
+			rot = 0; pos = 0;
+		}
+		else if(indice == 1){
+			rot = 0; pos = 1;
+		}
+		else if(indice == 2){
+			rot = 0; pos = 2;
+		}
+		else if(indice == 3){
+			rot = 0; pos = 3;
+		}
+		// para la rotacion 1
+		else if(indice == 4){
+			rot = 1; pos = 0;
+		}
+		else if(indice == 5){
+			rot = 1; pos = 1;
+		}
+		else if(indice == 6){
+			rot = 1; pos = 2;
+		}
+		else if(indice == 7){
+			rot = 1; pos = 3;
+		}
+		// para la rotacion 2
+		else if(indice == 8){
+			rot = 2; pos = 0;
+		}
+		else if(indice == 9){
+			rot = 2; pos = 1;
+		}
+		else if(indice == 10){
+			rot = 2; pos = 2;
+		}
+		else if(indice == 11){
+			rot = 2; pos = 3;
+		}
+		// para la rotacion 3
+		else if(indice == 12){
+			rot = 3; pos = 0;
+		}
+		else if(indice == 13){
+			rot = 3; pos = 1;
+		}
+		else if(indice == 14){
+			rot = 3; pos = 2;
+		}
+		else if(indice == 15){
+			rot = 3; pos = 3;
+		}
+
+		result[0] = type;
+		result[1] = rot;
+		result[2] = pos;
+		
+		return result;
+	}
+
+	double getMaxRewardState(int state){   // recorro toda la fila en Qvalues[next_state]
+		double result = MIN_VALUE;
+		
+		for(int i = 0; i < possible_actions; i++){
+			if(result < Qvalues.values[state][i]){
+				result = Qvalues.values[state][i];
+			}
+		}
+
+		return result;
+	}
+
+	int getMaxActionState(int state){   // recorro toda la fila en Qvalues[next_state]
+		double value = MIN_VALUE;
+		int result = -1;	
+		for(int i = 0; i < possible_actions; i++){
+			if(value < Qvalues.values[state][i]){
+				value = Qvalues.values[state][i];
+				result = i;
+			}
+		}
+
+		return result;
+	}
+
+	int[] getCharacteristics(int board[][]){
+		int heights[] = new int[width];
+		int maxh = 0;
+		int nholes = 0;
+		int rowsholesArray[] = new int[height];
+		int rowsholes = 0;
+		int i = 0;
+		int j = 0;
+		int k = 0;
+		int result[] = new int[3];  // 3 caracteristicas: altura maxima, cantidad de huecos, filas con huecos
+
+		for(k=0; k<height; k++){		// Inicializo el arreglo
+			rowsholesArray[k] = 0;
+		}
+		for(i = 0; i < width; i++){
+			for(j=0; j<height; j++){
+				if (board[i+PADDING][j+PADDING]!= 0) 
+				// empiezo de arriba a abajo si encuentro un casillero lleno, es porq ahi esta la altura
+				// para calcularla utilizo height - j (que son los casilleros vacios por arriba)
+				break;
+			}
+			heights[i] = height-j;
+
+			for(; j < height; j++){
+				if(board[i+PADDING][j+PADDING] == 0){
+				//System.out.printf("Encontre un hueco en la columna %d, linea %d\n",i,j);
+				nholes++;
+				rowsholesArray[j] = 1;		// marco en que filas encontré un hueco, puedo marcar varias veces.
+				}
+			}
+
+			if(heights[i] > maxh)
+				maxh = heights[i];
+		}
+
+		for(k=0; k<height; k++){		// Cuento la cantidad de filas con huecos.
+			if (rowsholesArray[k] == 1)
+				rowsholes++;
+		}
+		result[0] = maxh;
+		result[1] = nholes;
+		result[2] = rowsholes;
+
+		return result;
+	}
+
+	/**	* Assigns a heuristic value to the game state represented by "board"	* @param board the board	* @return  a value estimation of "board"	*/
+	double getValue(int board[][]){
+		int characteristics[] = getCharacteristics(board);
+		int maxh = characteristics[0];
+		int nholes = characteristics[1];
+		int rowsholes = characteristics[2];		
+		
+		// a very simple heuristic evaluation function... 
+		// your algorithm should learn something better ;-)
+		double value = -maxh - 0.1*nholes - 0.5*rowsholes + 0.1*CompletedLines;
+
+		return value;
+	}
+
+
+		public static void main(String[] args){
+			System.out.println("Message from inside the agent: Running the Q-Learning Agent Alpha version!!!");
+			AgentLoader L=new AgentLoader(new QTetrisAgent());
+			L.run();
+		}
+
+}
